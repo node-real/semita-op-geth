@@ -385,7 +385,7 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *trie.Database, gen
 	// on top of an existing private network genesis block). In that case, only
 	// apply the overrides.
 	if genesis == nil && stored != params.MainnetGenesisHash && stored != params.OPBNBMainNetGenesisHash &&
-		stored != params.OPBNBTestNetGenesisHash && stored != params.OPBNBDevNetGenesisHash {
+		stored != params.OPBNBTestNetGenesisHash && stored != params.OPBNBDevNetGenesisHash && stored != params.ComboMainNetGenesisHash {
 		newcfg = storedcfg
 		applyOverrides(newcfg)
 	}
@@ -460,6 +460,8 @@ func (g *Genesis) configOrDefault(ghash common.Hash) *params.ChainConfig {
 		return params.OPBNBTestNetConfig
 	case ghash == params.OPBNBDevNetGenesisHash:
 		return params.OPBNBDevNetConfig
+	case ghash == params.ComboMainNetGenesisHash:
+		return params.ComboMainNetConfig
 	default:
 		return params.AllEthashProtocolChanges
 	}
