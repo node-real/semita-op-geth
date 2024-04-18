@@ -86,6 +86,8 @@ type executableDataMarshaling struct {
 	ExtraData     hexutil.Bytes
 	LogsBloom     hexutil.Bytes
 	Transactions  []hexutil.Bytes
+	BlobGasUsed   *hexutil.Uint64
+	ExcessBlobGas *hexutil.Uint64
 }
 
 //go:generate go run github.com/fjl/gencodec -type ExecutionPayloadEnvelope -field-override executionPayloadEnvelopeMarshaling -out gen_epe.go

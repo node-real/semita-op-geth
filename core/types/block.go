@@ -96,18 +96,22 @@ type Header struct {
 		// Random was added during the merge and contains the BeaconState randomness
 		Random common.Hash `json:"random" rlp:"optional"`
 	*/
+	// ParentBeaconRoot was added by EIP-4788 and is ignored in legacy headers.
+	ParentBeaconRoot *common.Hash `json:"parentBeaconBlockRoot" rlp:"optional"`
 }
 
 // field type overrides for gencodec
 type headerMarshaling struct {
-	Difficulty *hexutil.Big
-	Number     *hexutil.Big
-	GasLimit   hexutil.Uint64
-	GasUsed    hexutil.Uint64
-	Time       hexutil.Uint64
-	Extra      hexutil.Bytes
-	BaseFee    *hexutil.Big
-	Hash       common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
+	Difficulty    *hexutil.Big
+	Number        *hexutil.Big
+	GasLimit      hexutil.Uint64
+	GasUsed       hexutil.Uint64
+	Time          hexutil.Uint64
+	Extra         hexutil.Bytes
+	BaseFee       *hexutil.Big
+	Hash          common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
+	BlobGasUsed   *hexutil.Uint64
+	ExcessBlobGas *hexutil.Uint64
 }
 
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
