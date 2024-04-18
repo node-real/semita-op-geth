@@ -72,6 +72,8 @@ type ExecutableData struct {
 	BlockHash     common.Hash         `json:"blockHash"     gencodec:"required"`
 	Transactions  [][]byte            `json:"transactions"  gencodec:"required"`
 	Withdrawals   []*types.Withdrawal `json:"withdrawals"`
+	BlobGasUsed   *uint64             `json:"blobGasUsed"`
+	ExcessBlobGas *uint64             `json:"excessBlobGas"`
 }
 
 // JSON type overrides for executableData.
@@ -237,6 +239,8 @@ func BlockToExecutableData(block *types.Block, fees *big.Int) *ExecutionPayloadE
 		Random:        block.MixDigest(),
 		ExtraData:     block.Extra(),
 		Withdrawals:   block.Withdrawals(),
+		BlobGasUsed:   block.BlobGasUsed(),
+		ExcessBlobGas: block.ExcessBlobGas(),
 	}
 	return &ExecutionPayloadEnvelope{ExecutionPayload: data, BlockValue: fees}
 }

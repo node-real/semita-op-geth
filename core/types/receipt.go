@@ -64,6 +64,9 @@ type Receipt struct {
 	ContractAddress   common.Address `json:"contractAddress"`
 	GasUsed           uint64         `json:"gasUsed" gencodec:"required"`
 	EffectiveGasPrice *big.Int       `json:"effectiveGasPrice"`
+	// required, but tag omitted for backwards compatibility
+	BlobGasUsed  uint64   `json:"blobGasUsed,omitempty"`
+	BlobGasPrice *big.Int `json:"blobGasPrice,omitempty"`
 
 	// DepositNonce was introduced in Regolith to store the actual nonce used by deposit transactions
 	// The state transition process ensures this is only set for Regolith deposit transactions.
@@ -466,6 +469,9 @@ func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 	case DepositTxType:
 		w.WriteByte(DepositTxType)
 		rlp.Encode(w, data)
+	case BlobTxType:
+		w.WriteByte(BlobTxType)
+		rlp.Encode(w, data)
 	default:
 		// For unsupported types, write nothing. Since this is for
 		// DeriveSha, the error will be caught matching the derived hash
@@ -475,7 +481,7 @@ func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 
 // DeriveFields fills the receipts with their computed fields based on consensus
 // data and contextual infos like containing block and transactions.
-func (rs Receipts) DeriveFields(config *params.ChainConfig, hash common.Hash, number uint64, time uint64, baseFee *big.Int, txs Transactions) error {
+func (rs Receipts) DeriveFields(config *params.ChainConfig, hash common.Hash, number uint64, time uint64, baseFee *big.Int, blobGasPrice *big.Int, txs Transactions) error {
 	signer := MakeSigner(config, new(big.Int).SetUint64(number))
 
 	logIndex := uint(0)
@@ -488,6 +494,12 @@ func (rs Receipts) DeriveFields(config *params.ChainConfig, hash common.Hash, nu
 		rs[i].TxHash = txs[i].Hash()
 
 		rs[i].EffectiveGasPrice = txs[i].inner.effectiveGasPrice(new(big.Int), baseFee)
+
+		// EIP-4844 blob transaction fields
+		if txs[i].Type() == BlobTxType {
+			rs[i].BlobGasUsed = txs[i].BlobGas()
+			rs[i].BlobGasPrice = blobGasPrice
+		}
 
 		// block location fields
 		rs[i].BlockHash = hash
