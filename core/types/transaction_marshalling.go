@@ -22,6 +22,8 @@ import (
 	"io"
 	"math/big"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -36,12 +38,15 @@ type txJSON struct {
 	GasPrice             *hexutil.Big    `json:"gasPrice"`
 	MaxPriorityFeePerGas *hexutil.Big    `json:"maxPriorityFeePerGas"`
 	MaxFeePerGas         *hexutil.Big    `json:"maxFeePerGas"`
+	MaxFeePerBlobGas     *hexutil.Big    `json:"maxFeePerBlobGas,omitempty"`
 	Gas                  *hexutil.Uint64 `json:"gas"`
 	Value                *hexutil.Big    `json:"value"`
-	Data                 *hexutil.Bytes  `json:"input"`
+	Input                *hexutil.Bytes  `json:"input"`
+	BlobVersionedHashes  []common.Hash   `json:"blobVersionedHashes,omitempty"`
 	V                    *hexutil.Big    `json:"v"`
 	R                    *hexutil.Big    `json:"r"`
 	S                    *hexutil.Big    `json:"s"`
+	YParity              *hexutil.Uint64 `json:"yParity,omitempty"`
 	To                   *common.Address `json:"to"`
 
 	// Deposit transaction fields
@@ -58,6 +63,26 @@ type txJSON struct {
 	Hash common.Hash `json:"hash"`
 }
 
+// yParityValue returns the YParity value from JSON. For backwards-compatibility reasons,
+// this can be given in the 'v' field or the 'yParity' field. If both exist, they must match.
+func (tx *txJSON) yParityValue() (*big.Int, error) {
+	if tx.YParity != nil {
+		val := uint64(*tx.YParity)
+		if val != 0 && val != 1 {
+			return nil, errInvalidYParity
+		}
+		bigval := new(big.Int).SetUint64(val)
+		if tx.V != nil && tx.V.ToInt().Cmp(bigval) != 0 {
+			return nil, errVYParityMismatch
+		}
+		return bigval, nil
+	}
+	if tx.V != nil {
+		return tx.V.ToInt(), nil
+	}
+	return nil, errVYParityMissing
+}
+
 // MarshalJSON marshals as JSON with a hash.
 func (tx *Transaction) MarshalJSON() ([]byte, error) {
 	var enc txJSON
@@ -72,7 +97,7 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		enc.Gas = (*hexutil.Uint64)(&itx.Gas)
 		enc.GasPrice = (*hexutil.Big)(itx.GasPrice)
 		enc.Value = (*hexutil.Big)(itx.Value)
-		enc.Data = (*hexutil.Bytes)(&itx.Data)
+		enc.Input = (*hexutil.Bytes)(&itx.Data)
 		enc.To = tx.To()
 		enc.V = (*hexutil.Big)(itx.V)
 		enc.R = (*hexutil.Big)(itx.R)
@@ -84,7 +109,7 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		enc.Gas = (*hexutil.Uint64)(&itx.Gas)
 		enc.GasPrice = (*hexutil.Big)(itx.GasPrice)
 		enc.Value = (*hexutil.Big)(itx.Value)
-		enc.Data = (*hexutil.Bytes)(&itx.Data)
+		enc.Input = (*hexutil.Bytes)(&itx.Data)
 		enc.To = tx.To()
 		enc.V = (*hexutil.Big)(itx.V)
 		enc.R = (*hexutil.Big)(itx.R)
@@ -97,15 +122,32 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		enc.MaxFeePerGas = (*hexutil.Big)(itx.GasFeeCap)
 		enc.MaxPriorityFeePerGas = (*hexutil.Big)(itx.GasTipCap)
 		enc.Value = (*hexutil.Big)(itx.Value)
-		enc.Data = (*hexutil.Bytes)(&itx.Data)
+		enc.Input = (*hexutil.Bytes)(&itx.Data)
 		enc.To = tx.To()
 		enc.V = (*hexutil.Big)(itx.V)
 		enc.R = (*hexutil.Big)(itx.R)
 		enc.S = (*hexutil.Big)(itx.S)
+	case *BlobTx:
+		enc.ChainID = (*hexutil.Big)(itx.ChainID.ToBig())
+		enc.Nonce = (*hexutil.Uint64)(&itx.Nonce)
+		enc.Gas = (*hexutil.Uint64)(&itx.Gas)
+		enc.MaxFeePerGas = (*hexutil.Big)(itx.GasFeeCap.ToBig())
+		enc.MaxPriorityFeePerGas = (*hexutil.Big)(itx.GasTipCap.ToBig())
+		enc.MaxFeePerBlobGas = (*hexutil.Big)(itx.BlobFeeCap.ToBig())
+		enc.Value = (*hexutil.Big)(itx.Value.ToBig())
+		enc.Input = (*hexutil.Bytes)(&itx.Data)
+		enc.AccessList = &itx.AccessList
+		enc.BlobVersionedHashes = itx.BlobHashes
+		enc.To = tx.To()
+		enc.V = (*hexutil.Big)(itx.V.ToBig())
+		enc.R = (*hexutil.Big)(itx.R.ToBig())
+		enc.S = (*hexutil.Big)(itx.S.ToBig())
+		yparity := itx.V.Uint64()
+		enc.YParity = (*hexutil.Uint64)(&yparity)
 	case *DepositTx:
 		enc.Gas = (*hexutil.Uint64)(&itx.Gas)
 		enc.Value = (*hexutil.Big)(itx.Value)
-		enc.Data = (*hexutil.Bytes)(&itx.Data)
+		enc.Input = (*hexutil.Bytes)(&itx.Data)
 		enc.To = tx.To()
 		enc.SourceHash = &itx.SourceHash
 		enc.From = &itx.From
@@ -150,10 +192,10 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'value' in transaction")
 		}
 		itx.Value = (*big.Int)(dec.Value)
-		if dec.Data == nil {
+		if dec.Input == nil {
 			return errors.New("missing required field 'input' in transaction")
 		}
-		itx.Data = *dec.Data
+		itx.Data = *dec.Input
 		if dec.V == nil {
 			return errors.New("missing required field 'v' in transaction")
 		}
@@ -203,10 +245,10 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'value' in transaction")
 		}
 		itx.Value = (*big.Int)(dec.Value)
-		if dec.Data == nil {
+		if dec.Input == nil {
 			return errors.New("missing required field 'input' in transaction")
 		}
-		itx.Data = *dec.Data
+		itx.Data = *dec.Input
 		if dec.V == nil {
 			return errors.New("missing required field 'v' in transaction")
 		}
@@ -260,10 +302,10 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'value' in transaction")
 		}
 		itx.Value = (*big.Int)(dec.Value)
-		if dec.Data == nil {
+		if dec.Input == nil {
 			return errors.New("missing required field 'input' in transaction")
 		}
-		itx.Data = *dec.Data
+		itx.Data = *dec.Input
 		if dec.V == nil {
 			return errors.New("missing required field 'v' in transaction")
 		}
@@ -282,6 +324,85 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 				return err
 			}
 		}
+	case BlobTxType:
+		var itx BlobTx
+		inner = &itx
+		if dec.ChainID == nil {
+			return errors.New("missing required field 'chainId' in transaction")
+		}
+		itx.ChainID = uint256.MustFromBig((*big.Int)(dec.ChainID))
+		if dec.Nonce == nil {
+			return errors.New("missing required field 'nonce' in transaction")
+		}
+		itx.Nonce = uint64(*dec.Nonce)
+		if dec.To == nil {
+			return errors.New("missing required field 'to' in transaction")
+		}
+		itx.To = *dec.To
+		if dec.Gas == nil {
+			return errors.New("missing required field 'gas' for txdata")
+		}
+		itx.Gas = uint64(*dec.Gas)
+		if dec.MaxPriorityFeePerGas == nil {
+			return errors.New("missing required field 'maxPriorityFeePerGas' for txdata")
+		}
+		itx.GasTipCap = uint256.MustFromBig((*big.Int)(dec.MaxPriorityFeePerGas))
+		if dec.MaxFeePerGas == nil {
+			return errors.New("missing required field 'maxFeePerGas' for txdata")
+		}
+		itx.GasFeeCap = uint256.MustFromBig((*big.Int)(dec.MaxFeePerGas))
+		if dec.MaxFeePerBlobGas == nil {
+			return errors.New("missing required field 'maxFeePerBlobGas' for txdata")
+		}
+		itx.BlobFeeCap = uint256.MustFromBig((*big.Int)(dec.MaxFeePerBlobGas))
+		if dec.Value == nil {
+			return errors.New("missing required field 'value' in transaction")
+		}
+		itx.Value = uint256.MustFromBig((*big.Int)(dec.Value))
+		if dec.Input == nil {
+			return errors.New("missing required field 'input' in transaction")
+		}
+		itx.Data = *dec.Input
+		if dec.AccessList != nil {
+			itx.AccessList = *dec.AccessList
+		}
+		if dec.BlobVersionedHashes == nil {
+			return errors.New("missing required field 'blobVersionedHashes' in transaction")
+		}
+		itx.BlobHashes = dec.BlobVersionedHashes
+
+		// signature R
+		var overflow bool
+		if dec.R == nil {
+			return errors.New("missing required field 'r' in transaction")
+		}
+		itx.R, overflow = uint256.FromBig((*big.Int)(dec.R))
+		if overflow {
+			return errors.New("'r' value overflows uint256")
+		}
+		// signature S
+		if dec.S == nil {
+			return errors.New("missing required field 's' in transaction")
+		}
+		itx.S, overflow = uint256.FromBig((*big.Int)(dec.S))
+		if overflow {
+			return errors.New("'s' value overflows uint256")
+		}
+		// signature V
+		vbig, err := dec.yParityValue()
+		if err != nil {
+			return err
+		}
+		itx.V, overflow = uint256.FromBig(vbig)
+		if overflow {
+			return errors.New("'v' value overflows uint256")
+		}
+		if itx.V.Sign() != 0 || itx.R.Sign() != 0 || itx.S.Sign() != 0 {
+			if err := sanityCheckSignature(vbig, itx.R.ToBig(), itx.S.ToBig(), false); err != nil {
+				return err
+			}
+		}
+
 	case DepositTxType:
 		if dec.AccessList != nil || dec.MaxFeePerGas != nil ||
 			dec.MaxPriorityFeePerGas != nil {
@@ -310,10 +431,10 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		itx.Value = (*big.Int)(dec.Value)
 		// mint may be omitted or nil if there is nothing to mint.
 		itx.Mint = (*big.Int)(dec.Mint)
-		if dec.Data == nil {
+		if dec.Input == nil {
 			return errors.New("missing required field 'input' in transaction")
 		}
-		itx.Data = *dec.Data
+		itx.Data = *dec.Input
 		if dec.From == nil {
 			return errors.New("missing required field 'from' in transaction")
 		}

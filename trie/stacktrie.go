@@ -202,7 +202,8 @@ const (
 func (st *StackTrie) TryUpdate(key, value []byte) error {
 	k := keybytesToHex(key)
 	if len(value) == 0 {
-		panic("deletion not supported")
+		//panic("deletion not supported")
+		return errors.New("trying to insert empty (deletion)")
 	}
 	st.insert(k[:len(k)-1], value, nil)
 	return nil

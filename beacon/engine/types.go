@@ -72,6 +72,8 @@ type ExecutableData struct {
 	BlockHash     common.Hash         `json:"blockHash"     gencodec:"required"`
 	Transactions  [][]byte            `json:"transactions"  gencodec:"required"`
 	Withdrawals   []*types.Withdrawal `json:"withdrawals"`
+	BlobGasUsed   *uint64             `json:"blobGasUsed"`
+	ExcessBlobGas *uint64             `json:"excessBlobGas"`
 }
 
 // JSON type overrides for executableData.
@@ -84,6 +86,8 @@ type executableDataMarshaling struct {
 	ExtraData     hexutil.Bytes
 	LogsBloom     hexutil.Bytes
 	Transactions  []hexutil.Bytes
+	BlobGasUsed   *hexutil.Uint64
+	ExcessBlobGas *hexutil.Uint64
 }
 
 //go:generate go run github.com/fjl/gencodec -type ExecutionPayloadEnvelope -field-override executionPayloadEnvelopeMarshaling -out gen_epe.go
@@ -237,6 +241,8 @@ func BlockToExecutableData(block *types.Block, fees *big.Int) *ExecutionPayloadE
 		Random:        block.MixDigest(),
 		ExtraData:     block.Extra(),
 		Withdrawals:   block.Withdrawals(),
+		BlobGasUsed:   block.BlobGasUsed(),
+		ExcessBlobGas: block.ExcessBlobGas(),
 	}
 	return &ExecutionPayloadEnvelope{ExecutionPayload: data, BlockValue: fees}
 }

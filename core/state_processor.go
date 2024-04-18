@@ -133,6 +133,11 @@ func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, sta
 	receipt.TxHash = tx.Hash()
 	receipt.GasUsed = result.UsedGas
 
+	if tx.Type() == types.BlobTxType {
+		receipt.BlobGasUsed = uint64(len(tx.BlobHashes()) * params.BlobTxBlobGasPerBlob)
+		receipt.BlobGasPrice = evm.Context.BlobBaseFee
+	}
+
 	if msg.IsDepositTx && config.IsOptimismRegolith(evm.Context.Time) {
 		// The actual nonce for deposit transactions is only recorded from Regolith onwards.
 		// Before the Regolith fork the DepositNonce must remain nil

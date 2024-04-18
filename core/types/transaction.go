@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"container/heap"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"sync/atomic"
@@ -39,6 +40,9 @@ var (
 	ErrTxTypeNotSupported   = errors.New("transaction type not supported")
 	ErrGasFeeCapTooLow      = errors.New("fee cap less than base fee")
 	errShortTypedTx         = errors.New("typed transaction too short")
+	errInvalidYParity       = errors.New("'yParity' field must be 0 or 1")
+	errVYParityMismatch     = errors.New("'v' and 'yParity' fields do not match")
+	errVYParityMissing      = errors.New("missing 'yParity' or 'v' field in transaction")
 )
 
 // Transaction types.
@@ -46,6 +50,7 @@ const (
 	LegacyTxType = iota
 	AccessListTxType
 	DynamicFeeTxType
+	BlobTxType
 )
 
 // Transaction is an Ethereum transaction.
@@ -200,6 +205,10 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 	case DepositTxType:
 		var inner DepositTx
 		err := rlp.DecodeBytes(b[1:], &inner)
+		return &inner, err
+	case BlobTxType:
+		var inner BlobTx
+		err := inner.decode(b[1:])
 		return &inner, err
 	default:
 		return nil, ErrTxTypeNotSupported
@@ -442,6 +451,93 @@ func (tx *Transaction) EffectiveGasTipIntCmp(other *big.Int, baseFee *big.Int) i
 		return tx.GasTipCapIntCmp(other)
 	}
 	return tx.EffectiveGasTipValue(baseFee).Cmp(other)
+}
+
+// BlobGas returns the blob gas limit of the transaction for blob transactions, 0 otherwise.
+func (tx *Transaction) BlobGas() uint64 {
+	if blobtx, ok := tx.inner.(*BlobTx); ok {
+		return blobtx.blobGas()
+	}
+	return 0
+}
+
+// BlobGasFeeCap returns the blob gas fee cap per blob gas of the transaction for blob transactions, nil otherwise.
+func (tx *Transaction) BlobGasFeeCap() *big.Int {
+	if blobtx, ok := tx.inner.(*BlobTx); ok {
+		return blobtx.BlobFeeCap.ToBig()
+	}
+	return nil
+}
+
+// BlobHashes returns the hashes of the blob commitments for blob transactions, nil otherwise.
+func (tx *Transaction) BlobHashes() []common.Hash {
+	if blobtx, ok := tx.inner.(*BlobTx); ok {
+		return blobtx.BlobHashes
+	}
+	return nil
+}
+
+// BlobTxSidecar returns the sidecar of a blob transaction, nil otherwise.
+func (tx *Transaction) BlobTxSidecar() *BlobTxSidecar {
+	if blobtx, ok := tx.inner.(*BlobTx); ok {
+		return blobtx.Sidecar
+	}
+	return nil
+}
+
+// SetBlobTxSidecar sets the sidecar of a transaction.
+// The sidecar should match the blob-tx versioned hashes, or the transaction will be invalid.
+// This allows tools to easily re-attach blob sidecars to signed transactions that omit the sidecar.
+func (tx *Transaction) SetBlobTxSidecar(sidecar *BlobTxSidecar) error {
+	blobtx, ok := tx.inner.(*BlobTx)
+	if !ok {
+		return fmt.Errorf("not a blob tx, type = %d", tx.Type())
+	}
+	blobtx.Sidecar = sidecar
+	return nil
+}
+
+// BlobGasFeeCapCmp compares the blob fee cap of two transactions.
+func (tx *Transaction) BlobGasFeeCapCmp(other *Transaction) int {
+	return tx.BlobGasFeeCap().Cmp(other.BlobGasFeeCap())
+}
+
+// BlobGasFeeCapIntCmp compares the blob fee cap of the transaction against the given blob fee cap.
+func (tx *Transaction) BlobGasFeeCapIntCmp(other *big.Int) int {
+	return tx.BlobGasFeeCap().Cmp(other)
+}
+
+// WithoutBlobTxSidecar returns a copy of tx with the blob sidecar removed.
+func (tx *Transaction) WithoutBlobTxSidecar() *Transaction {
+	blobtx, ok := tx.inner.(*BlobTx)
+	if !ok {
+		return tx
+	}
+	cpy := &Transaction{
+		inner: blobtx.withoutSidecar(),
+		time:  tx.time,
+	}
+	// Note: tx.size cache not carried over because the sidecar is included in size!
+	if h := tx.hash.Load(); h != nil {
+		cpy.hash.Store(h)
+	}
+	if f := tx.from.Load(); f != nil {
+		cpy.from.Store(f)
+	}
+	return cpy
+}
+
+// SetTime sets the decoding time of a transaction. This is used by tests to set
+// arbitrary times and by persistent transaction pools when loading old txs from
+// disk.
+func (tx *Transaction) SetTime(t time.Time) {
+	tx.time = t
+}
+
+// Time returns the time when the transaction was first seen on the network. It
+// is a heuristic to prefer mining older txs vs new all other things equal.
+func (tx *Transaction) Time() time.Time {
+	return tx.time
 }
 
 // Hash returns the transaction hash.
