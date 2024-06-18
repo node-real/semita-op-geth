@@ -33,6 +33,8 @@ var (
 	OPBNBMainNetGenesisHash = common.HexToHash("0x4dd61178c8b0f01670c231597e7bcb368e84545acd46d940a896d6a791dd6df4")
 	OPBNBTestNetGenesisHash = common.HexToHash("0x51fa57729dfb1c27542c21b06cb72a0459c57440ceb43a465dae1307cd04fe80")
 	OPBNBQANetGenesisHash   = common.HexToHash("0xe182e685b1ec05ca55f2374cb3a190d1ae8f3e196acb55a69efd61536fc3983f")
+	ComboMainNetGenesisHash = common.HexToHash("0x92fcf9e91a4cdd7ffc7e67207e77dfba049bacf1ede5c5917a40f9537e05f4bc")
+	ComboTestNetGenesisHash = common.HexToHash("0x51d565869cb1c6d7e577848ccd1f93918b99427c1cc3fed9dca628d0cffcefbb")
 )
 
 const (
@@ -270,6 +272,74 @@ var (
 		CancunTime:  newUint64(1714995000), // May-06-2024 11:30 AM +UTC
 		EcotoneTime: newUint64(1714995000), // May-06-2024 11:30 AM +UTC
 		HaberTime:   newUint64(1716361200), // May-22-2024 07:00 AM +UTC
+	}
+	// ComboMainNetConfig is the chain parameters to run a node on the combo main network.
+	ComboMainNetConfig = &ChainConfig{
+		ChainID:                       big.NewInt(9980),
+		HomesteadBlock:                big.NewInt(0),
+		EIP150Block:                   big.NewInt(0),
+		EIP155Block:                   big.NewInt(0),
+		EIP158Block:                   big.NewInt(0),
+		ByzantiumBlock:                big.NewInt(0),
+		ConstantinopleBlock:           big.NewInt(0),
+		PetersburgBlock:               big.NewInt(0),
+		IstanbulBlock:                 big.NewInt(0),
+		MuirGlacierBlock:              big.NewInt(0),
+		BerlinBlock:                   big.NewInt(0),
+		LondonBlock:                   big.NewInt(0),
+		ArrowGlacierBlock:             big.NewInt(0),
+		GrayGlacierBlock:              big.NewInt(0),
+		MergeNetsplitBlock:            big.NewInt(0),
+		BedrockBlock:                  big.NewInt(0),
+		RegolithTime:                  newUint64(0),
+		TerminalTotalDifficulty:       big.NewInt(0),
+		TerminalTotalDifficultyPassed: true,
+		Optimism: &OptimismConfig{
+			EIP1559Elasticity:        2,
+			EIP1559Denominator:       8,
+			EIP1559DenominatorCanyon: 8,
+		},
+		Fermat:       big.NewInt(0),
+		ShanghaiTime: newUint64(1719814200), // July-01-2024 06:10 AM +UTC
+		CanyonTime:   newUint64(1719814200), // July-01-2024 06:10 AM +UTC
+		// Delta: the Delta upgrade does not affect the execution-layer, and is thus not configurable in the chain config.
+		CancunTime:  newUint64(1719815400), // July-01-2024 06:30 AM +UTC
+		EcotoneTime: newUint64(1719815400), // July-01-2024 06:30 AM +UTC
+		HaberTime:   newUint64(1719816000), // July-01-2024 06:40 AM +UTC
+	}
+	// ComboTestNetConfig is the chain parameters to run a node on the combo testnet network.
+	ComboTestNetConfig = &ChainConfig{
+		ChainID:                       big.NewInt(1715),
+		HomesteadBlock:                big.NewInt(0),
+		EIP150Block:                   big.NewInt(0),
+		EIP155Block:                   big.NewInt(0),
+		EIP158Block:                   big.NewInt(0),
+		ByzantiumBlock:                big.NewInt(0),
+		ConstantinopleBlock:           big.NewInt(0),
+		PetersburgBlock:               big.NewInt(0),
+		IstanbulBlock:                 big.NewInt(0),
+		MuirGlacierBlock:              big.NewInt(0),
+		BerlinBlock:                   big.NewInt(0),
+		LondonBlock:                   big.NewInt(0),
+		ArrowGlacierBlock:             big.NewInt(0),
+		GrayGlacierBlock:              big.NewInt(0),
+		MergeNetsplitBlock:            big.NewInt(0),
+		BedrockBlock:                  big.NewInt(0),
+		RegolithTime:                  newUint64(0),
+		TerminalTotalDifficulty:       big.NewInt(0),
+		TerminalTotalDifficultyPassed: true,
+		Optimism: &OptimismConfig{
+			EIP1559Elasticity:        2,
+			EIP1559Denominator:       8,
+			EIP1559DenominatorCanyon: 8,
+		},
+		Fermat:       big.NewInt(0),
+		ShanghaiTime: newUint64(1719209400), // June-24-2024 06:10 AM +UTC
+		CanyonTime:   newUint64(1719209400), // June-24-2024 06:10 AM +UTC
+		// Delta: the Delta upgrade does not affect the execution-layer, and is thus not configurable in the chain config.
+		CancunTime:  newUint64(1719210600), // June-24-2024 06:30 AM +UTC
+		EcotoneTime: newUint64(1719210600), // June-24-2024 06:30 AM +UTC
+		HaberTime:   newUint64(1719211200), // June-24-2024 06:40 AM +UTC
 	}
 
 	// AllEthashProtocolChanges contains every protocol change (EIPs) introduced
