@@ -27,12 +27,21 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
 )
+
+var (
+	errInvalidTopic      = errors.New("invalid topic(s)")
+	errFilterNotFound    = errors.New("filter not found")
+	errInvalidBlockRange = errors.New("invalid block range params")
+	errExceedMaxTopics   = errors.New("exceed max topics")
+)
+
+// The maximum number of topic criteria allowed, vm.LOG4 - vm.LOG0
+const maxTopics = 4
 
 // filter is a helper struct that holds meta information over the filter type
 // and associated subscription in the event system.
@@ -115,7 +124,7 @@ func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) rpc.ID {
 	api.filters[pendingTxSub.ID] = &filter{typ: PendingTransactionsSubscription, fullTx: fullTx != nil && *fullTx, deadline: time.NewTimer(api.timeout), txs: make([]*types.Transaction, 0), s: pendingTxSub}
 	api.filtersMu.Unlock()
 
-	gopool.Submit(func() {
+	go func() {
 		for {
 			select {
 			case pTx := <-pendingTxs:
@@ -131,7 +140,7 @@ func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) rpc.ID {
 				return
 			}
 		}
-	})
+	}()
 
 	return pendingTxSub.ID
 }
@@ -147,7 +156,7 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 
 	rpcSub := notifier.CreateSubscription()
 
-	gopool.Submit(func() {
+	go func() {
 		txs := make(chan []*types.Transaction, 128)
 		pendingTxSub := api.events.SubscribePendingTxs(txs)
 		chainConfig := api.sys.backend.ChainConfig()
@@ -174,7 +183,7 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 				return
 			}
 		}
-	})
+	}()
 
 	return rpcSub, nil
 }
@@ -191,7 +200,7 @@ func (api *FilterAPI) NewBlockFilter() rpc.ID {
 	api.filters[headerSub.ID] = &filter{typ: BlocksSubscription, deadline: time.NewTimer(api.timeout), hashes: make([]common.Hash, 0), s: headerSub}
 	api.filtersMu.Unlock()
 
-	gopool.Submit(func() {
+	go func() {
 		for {
 			select {
 			case h := <-headers:
@@ -207,7 +216,7 @@ func (api *FilterAPI) NewBlockFilter() rpc.ID {
 				return
 			}
 		}
-	})
+	}()
 
 	return headerSub.ID
 }
@@ -221,7 +230,7 @@ func (api *FilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
 
 	rpcSub := notifier.CreateSubscription()
 
-	gopool.Submit(func() {
+	go func() {
 		headers := make(chan *types.Header)
 		headersSub := api.events.SubscribeNewHeads(headers)
 
@@ -237,7 +246,7 @@ func (api *FilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
 				return
 			}
 		}
-	})
+	}()
 
 	return rpcSub, nil
 }
@@ -259,7 +268,7 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 		return nil, err
 	}
 
-	gopool.Submit(func() {
+	go func() {
 		for {
 			select {
 			case logs := <-matchedLogs:
@@ -275,7 +284,7 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 				return
 			}
 		}
-	})
+	}()
 
 	return rpcSub, nil
 }
@@ -306,7 +315,7 @@ func (api *FilterAPI) NewFilter(crit FilterCriteria) (rpc.ID, error) {
 	api.filters[logsSub.ID] = &filter{typ: LogsSubscription, crit: crit, deadline: time.NewTimer(api.timeout), logs: make([]*types.Log, 0), s: logsSub}
 	api.filtersMu.Unlock()
 
-	gopool.Submit(func() {
+	go func() {
 		for {
 			select {
 			case l := <-logs:
@@ -322,13 +331,16 @@ func (api *FilterAPI) NewFilter(crit FilterCriteria) (rpc.ID, error) {
 				return
 			}
 		}
-	})
+	}()
 
 	return logsSub.ID, nil
 }
 
 // GetLogs returns logs matching the given argument that are stored within the state.
 func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.Log, error) {
+	if len(crit.Topics) > maxTopics {
+		return nil, errExceedMaxTopics
+	}
 	var filter *Filter
 	if crit.BlockHash != nil {
 		// Block filter requested, construct a single-shot filter
@@ -342,6 +354,9 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 		end := rpc.LatestBlockNumber.Int64()
 		if crit.ToBlock != nil {
 			end = crit.ToBlock.Int64()
+		}
+		if begin > 0 && end > 0 && begin > end {
+			return nil, errInvalidBlockRange
 		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, crit.Addresses, crit.Topics)
@@ -377,7 +392,7 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 	api.filtersMu.Unlock()
 
 	if !found || f.typ != LogsSubscription {
-		return nil, fmt.Errorf("filter not found")
+		return nil, errFilterNotFound
 	}
 
 	var filter *Filter
@@ -453,7 +468,7 @@ func (api *FilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
 		}
 	}
 
-	return []interface{}{}, fmt.Errorf("filter not found")
+	return []interface{}{}, errFilterNotFound
 }
 
 // returnHashes is a helper that will return an empty hash array case the given hash array is nil,
@@ -492,7 +507,7 @@ func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 	if raw.BlockHash != nil {
 		if raw.FromBlock != nil || raw.ToBlock != nil {
 			// BlockHash is mutually exclusive with FromBlock/ToBlock criteria
-			return fmt.Errorf("cannot specify both BlockHash and FromBlock/ToBlock, choose one or the other")
+			return errors.New("cannot specify both BlockHash and FromBlock/ToBlock, choose one or the other")
 		}
 		args.BlockHash = raw.BlockHash
 	} else {
@@ -565,11 +580,11 @@ func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 						}
 						args.Topics[i] = append(args.Topics[i], parsed)
 					} else {
-						return fmt.Errorf("invalid topic(s)")
+						return errInvalidTopic
 					}
 				}
 			default:
-				return fmt.Errorf("invalid topic(s)")
+				return errInvalidTopic
 			}
 		}
 	}

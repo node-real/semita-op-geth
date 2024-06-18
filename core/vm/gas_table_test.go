@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -83,7 +84,7 @@ func TestEIP2200(t *testing.T) {
 	for i, tt := range eip2200Tests {
 		address := common.BytesToAddress([]byte("contract"))
 
-		statedb, _ := state.New(common.Hash{}, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
+		statedb, _ := state.New(types.EmptyRootHash, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
 		statedb.CreateAccount(address)
 		statedb.SetCode(address, hexutil.MustDecode(tt.input))
 		statedb.SetState(address, common.Hash{}, common.BytesToHash([]byte{tt.original}))
@@ -115,7 +116,7 @@ var createGasTests = []struct {
 	minimumGas uint64
 }{
 	// legacy create(0, 0, 0xc000) without 3860 used
-	{"0x61C00060006000f0" + "600052" + "60206000F3", false, 41237, 41237},
+	{"0x61C00060006000f0" + "600052" + "60206000F3", false, 41237, 41237}, //nolint:all
 	// legacy create(0, 0, 0xc000) _with_ 3860
 	{"0x61C00060006000f0" + "600052" + "60206000F3", true, 44309, 44309},
 	// create2(0, 0, 0xc001, 0) without 3860
@@ -135,7 +136,7 @@ func TestCreateGas(t *testing.T) {
 		var gasUsed = uint64(0)
 		doCheck := func(testGas int) bool {
 			address := common.BytesToAddress([]byte("contract"))
-			statedb, _ := state.New(common.Hash{}, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
+			statedb, _ := state.New(types.EmptyRootHash, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
 			statedb.CreateAccount(address)
 			statedb.SetCode(address, hexutil.MustDecode(tt.code))
 			statedb.Finalise(true)

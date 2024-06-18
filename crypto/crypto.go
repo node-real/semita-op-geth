@@ -28,7 +28,6 @@ import (
 	"io"
 	"math/big"
 	"os"
-	"sync"
 
 	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
@@ -51,10 +50,6 @@ var (
 	secp256k1halfN = new(big.Int).Div(secp256k1N, big.NewInt(2))
 
 	keccakState256Cache = fastcache.New(100 * 1024 * 1024)
-	keccakState256Pool  = sync.Pool{
-		New: func() interface{} {
-			return NewKeccakState()
-		}}
 )
 
 var errInvalidPubkey = errors.New("invalid secp256k1 public key")
@@ -86,15 +81,15 @@ func HashData(kh KeccakState, data []byte) (h common.Hash) {
 
 // Keccak256 calculates and returns the Keccak256 hash of the input data.
 func Keccak256(data ...[]byte) []byte {
+	// Only visit cache when input contains only one []byte to reduce cache overhead
+	// and avoid complexity of cache calculation.
 	if len(data) == 1 {
 		if hash, ok := keccakState256Cache.HasGet(nil, data[0]); ok {
 			return hash
 		}
 	}
 	b := make([]byte, 32)
-	d := keccakState256Pool.Get().(KeccakState)
-	defer keccakState256Pool.Put(d)
-	d.Reset()
+	d := NewKeccakState()
 	for _, b := range data {
 		d.Write(b)
 	}
@@ -108,14 +103,15 @@ func Keccak256(data ...[]byte) []byte {
 // Keccak256Hash calculates and returns the Keccak256 hash of the input data,
 // converting it to an internal Hash data structure.
 func Keccak256Hash(data ...[]byte) (h common.Hash) {
+	// Only visit cache when input contains only one []byte to reduce cache overhead
+	// and avoid complexity of cache calculation.
 	if len(data) == 1 {
 		if hash, ok := keccakState256Cache.HasGet(nil, data[0]); ok {
 			return common.BytesToHash(hash)
 		}
 	}
-	d := keccakState256Pool.Get().(KeccakState)
-	defer keccakState256Pool.Put(d)
-	d.Reset()
+
+	d := NewKeccakState()
 	for _, b := range data {
 		d.Write(b)
 	}
@@ -173,11 +169,11 @@ func toECDSA(d []byte, strict bool) (*ecdsa.PrivateKey, error) {
 
 	// The priv.D must < N
 	if priv.D.Cmp(secp256k1N) >= 0 {
-		return nil, fmt.Errorf("invalid private key, >=N")
+		return nil, errors.New("invalid private key, >=N")
 	}
 	// The priv.D must not be zero or negative.
 	if priv.D.Sign() <= 0 {
-		return nil, fmt.Errorf("invalid private key, zero or negative")
+		return nil, errors.New("invalid private key, zero or negative")
 	}
 
 	priv.PublicKey.X, priv.PublicKey.Y = priv.PublicKey.Curve.ScalarBaseMult(d)
@@ -236,7 +232,7 @@ func LoadECDSA(file string) (*ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	} else if n != len(buf) {
-		return nil, fmt.Errorf("key file too short, want 64 hex characters")
+		return nil, errors.New("key file too short, want 64 hex characters")
 	}
 	if err := checkKeyFileEnd(r); err != nil {
 		return nil, err

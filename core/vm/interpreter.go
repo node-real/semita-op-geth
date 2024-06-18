@@ -17,28 +17,24 @@
 package vm
 
 import (
-	"sync"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 )
 
-// EVMInterpreterPool is a pool of EVMInterpreter instances
-var EVMInterpreterPool = sync.Pool{
-	New: func() interface{} {
-		return &EVMInterpreter{}
-	},
-}
+// PrecompileOverrides is a function that can be used to override the default precompiled contracts
+type PrecompileOverrides func(params.Rules, PrecompiledContract, common.Address) (PrecompiledContract, bool)
 
 // Config are the configuration options for the Interpreter
 type Config struct {
-	Debug                   bool      // Enables debugging
-	Tracer                  EVMLogger // Opcode logger
-	NoBaseFee               bool      // Forces the EIP-1559 baseFee to 0 (needed for 0 price calls)
-	EnablePreimageRecording bool      // Enables recording of SHA3/keccak preimages
-	ExtraEips               []int     // Additional EIPS that are to be enabled
+	Tracer                      EVMLogger           // Opcode logger
+	NoBaseFee                   bool                // Forces the EIP-1559 baseFee to 0 (needed for 0 price calls)
+	EnablePreimageRecording     bool                // Enables recording of SHA3/keccak preimages
+	ExtraEips                   []int               // Additional EIPS that are to be enabled
+	OptimismPrecompileOverrides PrecompileOverrides // Precompile overrides for Optimism
+	EnableOpcodeOptimizations bool      // Enable opcode optimization
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,
@@ -55,7 +51,7 @@ type EVMInterpreter struct {
 	table *JumpTable
 
 	hasher    crypto.KeccakState // Keccak256 hasher instance shared across opcodes
-	hasherBuf common.Hash        // Keccak256 hasher result array shared aross opcodes
+	hasherBuf common.Hash        // Keccak256 hasher result array shared across opcodes
 
 	readOnly   bool   // Whether to throw on stateful modifications
 	returnData []byte // Last CALL's return data for subsequent reuse
@@ -66,6 +62,8 @@ func NewEVMInterpreter(evm *EVM) *EVMInterpreter {
 	// If jump table was not initialised we set the default one.
 	var table *JumpTable
 	switch {
+	case evm.chainRules.IsCancun:
+		table = &cancunInstructionSet
 	case evm.chainRules.IsShanghai:
 		table = &shanghaiInstructionSet
 	case evm.chainRules.IsMerge:
@@ -103,13 +101,10 @@ func NewEVMInterpreter(evm *EVM) *EVMInterpreter {
 		}
 	}
 	evm.Config.ExtraEips = extraEips
-
-	evmInterpreter := EVMInterpreterPool.Get().(*EVMInterpreter)
-	evmInterpreter.evm = evm
-	evmInterpreter.table = table
-	evmInterpreter.readOnly = false
-	evmInterpreter.returnData = nil
-	return evmInterpreter
+	if evm.Config.EnableOpcodeOptimizations {
+		table = createOptimizedOpcodeTable(table)
+	}
+	return &EVMInterpreter{evm: evm, table: table}
 }
 
 // Run loops and evaluates the contract's code with the given input data and returns
@@ -158,6 +153,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		gasCopy uint64 // for EVMLogger to log gas remaining before execution
 		logged  bool   // deferred EVMLogger should ignore already logged steps
 		res     []byte // result of the opcode execution function
+		debug   = in.evm.Config.Tracer != nil
 	)
 	// Don't move this deferred function, it's placed before the capturestate-deferred method,
 	// so that it get's executed _after_: the capturestate needs the stacks before
@@ -167,7 +163,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	}()
 	contract.Input = input
 
-	if in.evm.Config.Debug {
+	if debug {
 		defer func() {
 			if err != nil {
 				if !logged {
@@ -183,7 +179,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	// the execution of one of the operations or until the done flag is set by the
 	// parent context.
 	for {
-		if in.evm.Config.Debug {
+		if debug {
 			// Capture pre-execution values for tracing.
 			logged, pcCopy, gasCopy = false, pc, contract.Gas
 		}
@@ -228,14 +224,14 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 				return nil, ErrOutOfGas
 			}
 			// Do tracing before memory expansion
-			if in.evm.Config.Debug {
+			if debug {
 				in.evm.Config.Tracer.CaptureState(pc, op, gasCopy, cost, callContext, in.returnData, in.evm.depth, err)
 				logged = true
 			}
 			if memorySize > 0 {
 				mem.Resize(memorySize)
 			}
-		} else if in.evm.Config.Debug {
+		} else if debug {
 			in.evm.Config.Tracer.CaptureState(pc, op, gasCopy, cost, callContext, in.returnData, in.evm.depth, err)
 			logged = true
 		}

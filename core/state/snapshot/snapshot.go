@@ -22,10 +22,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -103,7 +103,7 @@ type Snapshot interface {
 
 	// Account directly retrieves the account associated with a particular hash in
 	// the snapshot slim data format.
-	Account(hash common.Hash) (*Account, error)
+	Account(hash common.Hash) (*types.SlimAccount, error)
 
 	// AccountRLP directly retrieves the account RLP associated with a particular
 	// hash in the snapshot slim data format.
@@ -154,6 +154,7 @@ type Config struct {
 	Recovery   bool // Indicator that the snapshots is in the recovery mode
 	NoBuild    bool // Indicator that the snapshots generation is disallowed
 	AsyncBuild bool // The snapshot generation is allowed to be constructed asynchronously
+	NoTries    bool // Indicator that the snapshot tries are disabled
 }
 
 // Tree is an Ethereum state snapshot tree. It consists of one persistent base
@@ -166,25 +167,14 @@ type Config struct {
 // storage data to avoid expensive multi-level trie lookups; and to allow sorted,
 // cheap iteration of the account/storage tries for sync aid.
 type Tree struct {
-	config   Config                   // Snapshots configurations
-	diskdb   ethdb.KeyValueStore      // Persistent database to store the snapshot
-	triedb   *trie.Database           // In-memory cache to access the trie through
-	layers   map[common.Hash]snapshot // Collection of all known layers
-	lock     sync.RWMutex
-	capLimit int // Maximum number of layers permitted to keep in memory
+	config Config                   // Snapshots configurations
+	diskdb ethdb.KeyValueStore      // Persistent database to store the snapshot
+	triedb *trie.Database           // In-memory cache to access the trie through
+	layers map[common.Hash]snapshot // Collection of all known layers
+	lock   sync.RWMutex
 
 	// Test hooks
 	onFlatten func() // Hook invoked when the bottom most diff layers are flattened
-}
-
-// SnapshotOption is a function that can be passed to New to configure the snapshot.
-type SnapshotOption func(*Tree)
-
-// SetCapLimit sets the maximum number of layers permitted to keep in memory.
-func SetCapLimit(capLimit int) SnapshotOption {
-	return func(tree *Tree) {
-		tree.capLimit = capLimit
-	}
 }
 
 // New attempts to load an already existing snapshot from a persistent key-value
@@ -203,23 +193,16 @@ func SetCapLimit(capLimit int) SnapshotOption {
 //     state trie.
 //   - otherwise, the entire snapshot is considered invalid and will be recreated on
 //     a background thread.
-func New(config Config, diskdb ethdb.KeyValueStore, triedb *trie.Database, root common.Hash, opts ...SnapshotOption) (*Tree, error) {
+func New(config Config, diskdb ethdb.KeyValueStore, triedb *trie.Database, root common.Hash) (*Tree, error) {
 	// Create a new, empty snapshot tree
 	snap := &Tree{
-		config:   config,
-		diskdb:   diskdb,
-		triedb:   triedb,
-		capLimit: 128,
-		layers:   make(map[common.Hash]snapshot),
+		config: config,
+		diskdb: diskdb,
+		triedb: triedb,
+		layers: make(map[common.Hash]snapshot),
 	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(snap)
-		}
-	}
-
 	// Attempt to load a previously persisted snapshot and rebuild one if failed
-	head, disabled, err := loadSnapshot(diskdb, triedb, root, config.CacheSize, config.Recovery, config.NoBuild)
+	head, disabled, err := loadSnapshot(diskdb, triedb, root, config.CacheSize, config.Recovery, config.NoBuild, config.NoTries)
 	if disabled {
 		log.Warn("Snapshot maintenance disabled (syncing)")
 		return snap, nil
@@ -290,7 +273,7 @@ func (t *Tree) Disable() {
 		case *diffLayer:
 			// If the layer is a simple diff, simply mark as stale
 			layer.lock.Lock()
-			atomic.StoreUint32(&layer.stale, 1)
+			layer.stale.Store(true)
 			layer.lock.Unlock()
 
 		default:
@@ -582,7 +565,7 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 			// Ensure we don't delete too much data blindly (contract can be
 			// huge). It's ok to flush, the root will go missing in case of a
 			// crash and we'll detect and regenerate the snapshot.
-			if batch.ValueSize() > ethdb.IdealBatchSize {
+			if batch.ValueSize() > 64*1024*1024 {
 				if err := batch.Write(); err != nil {
 					log.Crit("Failed to write storage deletions", "err", err)
 				}
@@ -608,7 +591,7 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 		// Ensure we don't write too much data blindly. It's ok to flush, the
 		// root will go missing in case of a crash and we'll detect and regen
 		// the snapshot.
-		if batch.ValueSize() > ethdb.IdealBatchSize {
+		if batch.ValueSize() > 64*1024*1024 {
 			if err := batch.Write(); err != nil {
 				log.Crit("Failed to write storage deletions", "err", err)
 			}
@@ -672,6 +655,13 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 		go res.generate(stats)
 	}
 	return res
+}
+
+// Release releases resources
+func (t *Tree) Release() {
+	if dl := t.disklayer(); dl != nil {
+		dl.Release()
+	}
 }
 
 // Journal commits an entire diff hierarchy to disk into a single journal entry.
@@ -744,7 +734,7 @@ func (t *Tree) Rebuild(root common.Hash) {
 		case *diffLayer:
 			// If the layer is a simple diff, simply mark as stale
 			layer.lock.Lock()
-			atomic.StoreUint32(&layer.stale, 1)
+			layer.stale.Store(true)
 			layer.lock.Unlock()
 
 		default:
@@ -871,7 +861,20 @@ func (t *Tree) DiskRoot() common.Hash {
 	return t.diskRoot()
 }
 
-// CapLimit returns the cap limit of the snapshot.
-func (t *Tree) CapLimit() int {
-	return t.capLimit
+// Size returns the memory usage of the diff layers above the disk layer and the
+// dirty nodes buffered in the disk layer. Currently, the implementation uses a
+// special diff layer (the first) as an aggregator simulating a dirty buffer, so
+// the second return will always be 0. However, this will be made consistent with
+// the pathdb, which will require a second return.
+func (t *Tree) Size() (diffs common.StorageSize, buf common.StorageSize) {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	var size common.StorageSize
+	for _, layer := range t.layers {
+		if layer, ok := layer.(*diffLayer); ok {
+			size += common.StorageSize(layer.memory)
+		}
+	}
+	return size, 0
 }

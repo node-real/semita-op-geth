@@ -17,6 +17,7 @@
 package core
 
 import (
+	"errors"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -217,7 +218,11 @@ func (bc *BlockChain) GetReceiptsByHash(hash common.Hash) types.Receipts {
 	if number == nil {
 		return nil
 	}
-	receipts := rawdb.ReadReceipts(bc.db, hash, *number, bc.chainConfig)
+	header := bc.GetHeader(hash, *number)
+	if header == nil {
+		return nil
+	}
+	receipts := rawdb.ReadReceipts(bc.db, hash, *number, header.Time, bc.chainConfig)
 	if receipts == nil {
 		return nil
 	}
@@ -274,6 +279,9 @@ func (bc *BlockChain) GetTd(hash common.Hash, number uint64) *big.Int {
 
 // HasState checks if state trie is fully present in the database or not.
 func (bc *BlockChain) HasState(hash common.Hash) bool {
+	if bc.NoTries() {
+		return bc.snaps != nil && bc.snaps.Snapshot(hash) != nil
+	}
 	_, err := bc.stateCache.OpenTrie(hash)
 	return err == nil
 }
@@ -289,16 +297,16 @@ func (bc *BlockChain) HasBlockAndState(hash common.Hash, number uint64) bool {
 	return bc.HasState(block.Root())
 }
 
-// TrieNode retrieves a blob of data associated with a trie node
-// either from ephemeral in-memory cache, or from persistent storage.
-func (bc *BlockChain) TrieNode(hash common.Hash) ([]byte, error) {
-	return bc.stateCache.TrieDB().Node(hash)
-}
-
-// ContractCode retrieves a blob of data associated with a contract hash
-// either from ephemeral in-memory cache, or from persistent storage.
-func (bc *BlockChain) ContractCode(hash common.Hash) ([]byte, error) {
-	return bc.stateCache.ContractCode(common.Hash{}, hash)
+// stateRecoverable checks if the specified state is recoverable.
+// Note, this function assumes the state is not present, because
+// state is not treated as recoverable if it's available, thus
+// false will be returned in this case.
+func (bc *BlockChain) stateRecoverable(root common.Hash) bool {
+	if bc.triedb.Scheme() == rawdb.HashScheme {
+		return false
+	}
+	result, _ := bc.triedb.Recoverable(root)
+	return result
 }
 
 // ContractCodeWithPrefix retrieves a blob of data associated with a contract
@@ -308,9 +316,19 @@ func (bc *BlockChain) ContractCode(hash common.Hash) ([]byte, error) {
 // new code scheme.
 func (bc *BlockChain) ContractCodeWithPrefix(hash common.Hash) ([]byte, error) {
 	type codeReader interface {
-		ContractCodeWithPrefix(addrHash, codeHash common.Hash) ([]byte, error)
+		ContractCodeWithPrefix(address common.Address, codeHash common.Hash) ([]byte, error)
 	}
-	return bc.stateCache.(codeReader).ContractCodeWithPrefix(common.Hash{}, hash)
+	// TODO(rjl493456442) The associated account address is also required
+	// in Verkle scheme. Fix it once snap-sync is supported for Verkle.
+	return bc.stateCache.(codeReader).ContractCodeWithPrefix(common.Address{}, hash)
+}
+
+// ContractCode retrieves a blob of data associated with a contract hash
+// either from ephemeral in-memory cache, or from persistent storage.
+// This is a legacy-method, replaced by ContractCodeWithPrefix,
+// but required for old databases to serve snap-sync.
+func (bc *BlockChain) ContractCode(hash common.Hash) ([]byte, error) {
+	return bc.stateCache.ContractCode(common.Address{}, hash)
 }
 
 // State returns a new mutable state based on the current HEAD block.
@@ -320,7 +338,20 @@ func (bc *BlockChain) State() (*state.StateDB, error) {
 
 // StateAt returns a new mutable state based on a particular point in time.
 func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
-	return state.New(root, bc.stateCache, bc.snaps)
+	stateDb, err := state.New(root, bc.stateCache, bc.snaps)
+	if err != nil {
+		return nil, err
+	}
+
+	// If there's no trie and the specified snapshot is not available, getting
+	// any state will by default return nil.
+	// Instead of that, it will be more useful to return an error to indicate
+	// the state is not available.
+	if stateDb.NoTrie() && stateDb.GetSnap() == nil {
+		return nil, errors.New("state is not available")
+	}
+
+	return stateDb, err
 }
 
 // Config retrieves the chain's fork configuration.
@@ -411,3 +442,6 @@ func (bc *BlockChain) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscript
 func (bc *BlockChain) SubscribeBlockProcessingEvent(ch chan<- bool) event.Subscription {
 	return bc.scope.Track(bc.blockProcFeed.Subscribe(ch))
 }
+
+// ProofKeeper returns block chain proof keeper.
+func (bc *BlockChain) ProofKeeper() *ProofKeeper { return bc.proofKeeper }
